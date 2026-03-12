@@ -1,0 +1,377 @@
+---
+title: "NBA Fatigue & Betting Markets"
+author: "Tanya, Helen, and Claire"
+format:
+  dashboard:
+    theme: cosmo
+    embed-resources: true
+---
+
+
+# Introduction
+
+## Row {height=57%}
+
+:::{.card title="Project Overview"}
+
+Many times, professional basketball players in the NBA have packed schedules, playing back to back games and traveling across different time zones to compete multiple days in a row. A demanding schedule like this leads to accumulated fatigue on players and teams. Sports analysts and fans have come to notice that there can be scheduling disadvantages and away court disadvantages that impact player performance on the court. Based on this observation, sports betting platforms make betting spreads that aim to reflect these disadvantages. They aim to roughly predict the point difference based off of not just team strengths and weaknesses, injuries but also possible scheduling or away court disadvantages.
+
+Our project investigates whether NBA Betting Markets accurately predict fatigue, and how this new policy has effected the efficiency of these betting markets. In particular, if these scheduling patterns—and the resulting player fatigue—create predictable inefficiencies in the betting market. To answer these questions, we will use [historical game data collected from the official NBA website](https://www.kaggle.com/datasets/eoinamoore/historical-nba-data-and-player-box-scores) as well as [historical betting data collected from ESPN and Sportsbook Review](https://www.kaggle.com/datasets/cviaxmiwnptr/nba-betting-data-october-2007-to-june-2024).
+
+The Sports Betting industry has seen rapid growth recently with the rise of online betting. Because spread betting relies on the platforms ability to accurately judge these advantages and disadvantages, the relationship between team fatigue, scheduling, and game outcomes becomes increasingly important.
+
+:::
+
+:::{.card title="Big Picture Questions"}
+
+1. **Point Margin:** How does playing on back-to-back affect a team's actual point margin compared to when they have one or more days of rest?
+
+2. **Spread Accuracy:** Does the betting spread accurately account for team fatigue, or do teams on back-to-backs fail to cover the spread at a higher rate?
+
+3. **Market Efficiency:** Has the betting market become more efficient/accurate in predicting game outcomes in 2025 compared to 2018?
+
+:::
+
+
+
+## Row {height=23%}
+
+:::{.card title = "Ethical Considerations and Limitations"}
+
+Analyzing combined NBA results and betting data carries social implications regarding the normalization of gambling. While our data is public, we recognize that sports analytics can encourage high-risk behaviors. This study prioritizes understanding sports economics over gambling habits, acknowledging that betting lines represent real-world financial stakes. A significant bias arises from the exclusion of player-specific health data, like injury reports, which often impact performance more than the schedule alone. Regarding the eight human rights principles, we maintain Privacy by using anonymous statistics and Transparency through documented wrangling. Professional Responsibility is upheld through data validation, though Fairness is limited because we are overlooking travel disparities between conferences. While we lack Human Control over real-time coaching, we promote Accountability by investigating if markets operate on exploitative logic. Ultimately, we aim to uphold Human Values by treating athletes as more than data points, focusing on market efficiency rather than promoting active wagering.
+
+:::
+
+## Row {height=20%}
+
+:::{.card title="Group Information"}
+
+* **Helen Tam**: (Applied Math, htam4@uw.edu) Helen is interested in basketball.
+* **Tanya Wang**: (Biochemistry, twang320@uw.edu) Tanya is interested in betting. 
+* **Claire Wallace-Wells**: (Mathematics, pouchine@uw.edu) Claire is interested in WNBA.
+
+:::
+
+```{r}
+#| message: false
+#| warning: false
+
+# Load Libraries
+library(dplyr)
+# Load Data
+scores <- read.csv("Games.csv", header = TRUE)
+betting <- read.csv("nba_2008-2025.csv", header = TRUE)
+
+```
+
+```{r}
+# Clean Scores: Keep only necessary columns and convert string to formal Date object
+scores_1 <- scores |>
+  select(gameDateTimeEst, hometeamName, awayteamName, homeScore, awayScore, gameType) |>
+  rename(gameDate = gameDateTimeEst) |> 
+  mutate(gameDate = as.Date(gameDate))
+```
+
+```{r}
+# Map team names: Match each corresponding team name from both datasets
+team_fullNames <- c(
+  "lal" = "Lakers", "phx" = "Suns", "gs" = "Warriors", "bos" = "Celtics",
+  "bkn" = "Nets", "chi" = "Bulls", "mil" = "Bucks", "mia" = "Heat",
+  "phi" = "76ers", "lac" = "Clippers", "por" = "Trail Blazers", "utah" = "Jazz",
+  "hou" = "Rockets", "wsh" = "Wizards", "dal" = "Mavericks", "sa" = "Spurs",
+  "sac" = "Kings", "okc" = "Thunder", "det" = "Pistons", "tor" = "Raptors",
+  "ny" = "Knicks", "den" = "Nuggets", "orl" = "Magic", "cha" = "Hornets",
+  "atl" = "Hawks", "ind" = "Pacers", "mem" = "Grizzlies", "cle" = "Cavaliers",
+  "min" = "Timberwolves", "no" = "Pelicans" 
+)
+```
+
+```{r}
+# Clean Betting: Keep only necessary columns, convert string to formal Date object, and mutate the team names to match the scores dataset
+betting_1 <- betting[, c("date", "away", "home", "whos_favored", "total", "spread")] |>
+  mutate(date = as.Date(date)) |>
+  mutate(
+    home = team_fullNames[home],
+    away = team_fullNames[away]
+  )
+```
+```{r}
+joined_ds <- scores_1 |>
+  inner_join(
+    betting_1, 
+    by = c("gameDate" = "date", "hometeamName" = "home", "awayteamName" = "away")
+  )
+
+joined_ds_final <- joined_ds |>
+  # We only look at regular season games
+  filter(gameType == "Regular Season") |>
+  arrange(gameDate) |>
+  
+  # Identifying Back-to-Backs for Home Teams
+  group_by(hometeamName) |>
+  mutate(home_b2b = ifelse(as.numeric(gameDate - lag(gameDate)) == 1, "Yes", "No")) |>
+  ungroup() |>
+  
+  # Identifying Back-to-Backs for Away Teams
+  # This is vital as away teams often face harsher travel fatigue.
+  group_by(awayteamName) |>
+  mutate(away_b2b = ifelse(as.numeric(gameDate - lag(gameDate)) == 1, "Yes", "No")) |>
+  ungroup() |>
+
+  mutate(
+    # Clean up NAs for the first game of the season for each team.
+    home_b2b = ifelse(is.na(home_b2b), "No", home_b2b),
+    away_b2b = ifelse(is.na(away_b2b), "No", away_b2b),
+    
+    # NEW: Create a combined scenario variable to see the 'fatigue gap'
+    fatigue_scenario = case_when(
+      home_b2b == "No" & away_b2b == "No" ~ "Both Rested",
+      home_b2b == "Yes" & away_b2b == "No" ~ "Home Tired",
+      home_b2b == "No" & away_b2b == "Yes" ~ "Away Tired",
+      TRUE ~ "Both Tired"
+    ),
+    
+    actual_margin = homeScore - awayScore,
+    
+    # Calculate if the team covered the spread.
+    spread_result = ifelse(actual_margin + as.numeric(spread) > 0, "Covered", "Failed"),
+    
+    total_points = homeScore + awayScore,
+    ou_result = case_when(
+      total_points > as.numeric(total) ~ "Over",
+      total_points < as.numeric(total) ~ "Under",
+      TRUE ~ "Same" 
+    )
+  )
+
+```
+
+# Collected datasets
+
+## Row 1 {height=20%}
+::: {.card title="**Datasets**"}
+On this page, we included our original datasets that we will be merging together.
+:::
+
+## Row 2 {height=80%}
+
+### Row 2 Column 1
+
+```{r}
+library(DT)
+#| title: "**Historical NBA Data and Player Box Scores**"
+DT::datatable(head(scores, 100))
+
+```
+
+### Row 2 Column 2
+
+```{r}
+#| title: "**NBA Betting Data from October 2007 to June 2024**"
+DT::datatable(head(betting, 100))
+
+```
+
+# Joined/Modified Dataset
+
+## Row 1 {height=20%}
+::: {.card title="**Final Dataset**"}
+On this page, we included our joined dataset that was made from merging the two datasets we collected. We also modified it to make more columns (not in either of the original datasets) using data in the original datasets.
+:::
+
+## Row 2 {height=80%}
+
+### Row 2 Column 1
+
+```{r}
+#| title: "**Joined Dataset**"
+DT::datatable(head(joined_ds_final, 100))
+
+```
+
+# Data Context
+
+## Row {height=40%}
+
+:::{.card title="NBA Games Dataset"}
+**Data Source:** https://www.kaggle.com/datasets/eoinamoore/historical-nba-data-and-player-box-scores
+
+This dataset contains records about historical (1947-Present) NBA games, and it is collected and maintained by Eoin A Moore. Each record represents a game, and collects information such as team, final scores, and dates; it consists of 72,767 records. The data itself is scraped by an automated script from the official NBA website, and is updated daily. It is relevant to our analysis because it provides the actual outcomes of games along with team information. This is the basic information of our analysis, and the scores in particular will be necessary to answer questions about the accuracy/efficiency of prediction markets.
+
+:::
+
+:::{.card title="NBA Betting Dataset"}
+
+**Data Source**: https://www.kaggle.com/datasets/cviaxmiwnptr/nba-betting-data-october-2007-to-june-2024
+
+This dataset contains historical (October 2007 - June 2025) sports betting data for NBA games. It is collected and maintained by Kaggle user "cviaxmiwnptr". The data itself was collected from Sportsbook Reviews for the period 2007-2023, and since then has been collected directly from ESPN; records are given for a total of 23,118 games. It provides us with betting data, in particular predicted point spread and favored team. This information allows us, in conjunction with the previous dataset, to analyze questions about the accuracy of point spread predictions, and see how distributions change over time. Thought it covers a shorter period than our games dataset, the period is still long enough to provide important insights into modern NBA sports betting markets.
+
+:::
+
+## Row {height=23%}
+
+:::{.card title="Data Import and Joining"}
+
+* We first imported the datasets, along with the "dplyr" library for data manipulation
+* We cleaned both datasets to prepare them for join, by selecting only the necessary variables from each dataset. In particular, the date column was mutated into a date data-type.
+* We created a map for joining the two datasets by team name, converting between the three-letter abbreviations and the long-form team name (e.g. "lal" is "Lakers")
+* We use this map to mutate abbreviated team names in the Betting dataset to long-form team names.
+
+:::
+
+## Row {height=37%}
+
+:::{.card title="Preparing Data for Analysis"}
+
+* We filtered only 2018 and 2025 specifically to compare a "traditional" schedule against the modern season, where the NBA has tried to reduce travel fatigue.
+* We want to focus on only the regular season because playoff games have different rest patterns and betting behavior, so keeping only the regular season ensures a consistent "fatigue" baseline.
+* We want to identify home team back-to-backs (B2B) games by making a new column called "home_b2b" that tells us if the home team has played exactly 1 day ago, which we did the same for away teams with a new column called "away_b2b", but we keep in mind that this team has more fatigue from traveling
+* Because all the first games are NA since they have no previous game, we changed it to "No" so our calculations don't break
+* We made a new column called "actual_margin" to compare against the 'spread'. This tells us the real-world outcome before we apply betting logic.
+* We made a new column called "spread_result". It tells us if the team outperformed the oddsmakers' expectations. If they covered while tired, it suggests the market might be over-correcting for fatigue.
+* Fatigue often leads to lower shooting percentages, so we created 'ou_result' to see if back-to-back games tend to go "Under" more often.
+
+:::
+
+# Market Efficiency
+
+## Row {height=70%}
+
+### Column {width=80%}
+
+:::{.card}
+
+```{r}
+# We filter for 2018 and 2025 to compare different league scheduling eras
+joined_ds_vis1 <- joined_ds_final |>
+  filter(format(gameDate, "%Y") %in% c("2018", "2025")) |>
+  arrange(gameDate)
+  
+# Create a variable for Market Error
+joined_ds_vis1 <- joined_ds_vis1 |>
+  mutate(market_error = actual_margin + as.numeric(spread))
+```
+
+```{r}
+# Create 2018 vs 2025 market error visualization
+library(ggplot2)
+library(plotly)
+
+plot_data_final <- joined_ds_vis1 %>%
+  mutate(
+    Season = format(gameDate, "%Y"),
+    Error = round(market_error, 2)
+  )
+
+p1 <- ggplot(plot_data_final, aes(x = Error, fill = Season)) +
+  geom_density(alpha = 0.6, color = "white", size = 0.3) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray40") +
+  scale_fill_manual(values = c("2018" = "#2c3e50", "2025" = "#e74c3c")) +
+  labs(
+    title = "NBA Betting Market Efficiency",
+    subtitle = "Zero represents a perfect prediction",
+    x = "Market Error (Actual - Spread)",
+    y = "Density",
+    fill = "Season"
+  ) +
+  theme_minimal() +
+  theme(panel.grid.minor = element_blank())
+
+ggplotly(p1, tooltip = c("x", "fill")) %>%
+  config(displayModeBar = FALSE)
+```
+
+:::
+
+### Column {width=20%}
+
+:::{.card title="Code Notes"}
+
+To address the challenge of comparing market efficiency across seasons, I used geom_density() to create a density plot, which enabled a clearer visual overlay of error distributions than a histogram. I learned to use this tool by researching ggplot2 documentation and experimenting with alpha transparency settings until the 2018 and 2025 curves were clearly distinguishable on a single axis. This approach specifically clarified what it means for the market to be more or less efficient by showing the frequency spread of the error. It displays the error data in a way that clarifies what it means for the market to be more or less efficient, or more or less accurate. It shows the frequency spread in the error.
+
+:::
+
+## Row {height=30%}
+
+:::{.card title="Do Oddsmakers Get Sharper?"}
+
+One big question we had was whether or not the market has become more efficient over time. One way to look at this question is to determine if the oddsmakers have become "sharper" over time. In other words, has the error between the predicted spread and the final score become smaller?
+
+The visualization indicates the opposite might be true. Despite more data, the 2025 curve is wider than the 2018 curve. This means that, on average, the oddsmakers had higher error in 2025 than in 2018. This might indicate that the 2025 season was more volatile and harder to predict than the 2018 season.
+
+:::
+
+# Fatigue and Score
+
+## Row {height=70%}
+
+```{r}
+# Filter to look at only the year 2025
+vs_2025 <- joined_ds_final |>
+  filter(format(gameDate, "%Y") == "2025") |>
+  arrange(gameDate)
+```
+
+```{r}
+# Use a boxplot to see the raw impact of fatigue on the actual final score spread
+ggplot(vs_2025, aes(x = home_b2b, y = actual_margin, fill = home_b2b)) +
+  geom_boxplot(outlier.color = "red", outlier.shape = 1) +
+  scale_fill_manual(values = c("No" = "#18bc9c", "Yes" = "#e74c3c")) +
+  labs(
+    title = "2025 Point Margin: Rest vs. B2B",
+    x = "Home Team on Back-to-Back?",
+    y = "Actual Point Margin",
+    fill = "Fatigue"
+  ) +
+  theme_minimal()
+```
+
+## Row {height=30%}
+
+:::{.card title="How does Fatigue Effect Score?"}
+
+One component of evaluating how fatigue relates to oddsmaking and market efficiency is determining how fatigue affects score. Towards a partial answer to this question, we looked at how back-to-back games affected the home teams' final score. The visualization compares the basic Boolean situation in terms of point margin.
+
+One result of this analysis is that home teams playing back-to-back games have smaller point margins. Interestingly, looking at the red circles (outliers) on the chart, rested teams are more likely to participate in blowouts (winning or losing by 40+ points).
+
+:::
+
+# Market Accuracy
+
+## Row {height=70%}
+
+```{r}
+# We filter for 2025 to focus on current market behavior.
+# We use a 'fill' bar chart to show the exact percentage of market errors.
+vs_2025_scenarios <- joined_ds_final |> 
+  filter(format(gameDate, "%Y") == "2025") |>
+  arrange(gameDate)
+
+ggplot(vs_2025_scenarios, aes(x = fatigue_scenario, fill = spread_result)) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = scales::percent) +
+  scale_fill_manual(values = c("Covered" = "#27ae60", "Failed" = "#e74c3c")) +
+  labs(
+    title = "Market Failure by Fatigue Matchup (2025)",
+    subtitle = "Comparing the accuracy of point spreads across different rest scenarios",
+    x = "Matchup Scenario",
+    y = "Percentage of Games",
+    fill = "Spread Result"
+  ) +
+  theme_minimal()
+```
+
+## Row {height=30%}
+
+:::{.card title="When is the Market Wrong?"}
+To tie the two questions together, we want to analyze market performance in terms of the four combinations of back-to-back fatigue for both teams. The visualization is in terms of what percentage of games in the given scenario had their spreads covered.
+
+We can conclude that the market handles the away team being tired pretty well. On the other hand, it handles games where the home team is fatigued comparatively poorly. If the home team is on a back-to-back game, the market tends to struggle.
+:::
+
+# Conclusion
+
+Overall, our analysis suggests that NBA betting markets are not perfectly efficient and that player fatigue may affect both game outcomes and betting market accuracy. The comparison between the 2018 and 2025 seasons shows that the distribution of market error in 2025 is wider than in 2018. This means that the difference between predicted point spreads and actual game margins was generally larger. Rather than becoming more precise over time, which is what we expected to happen, the betting market had greater inaccuracy. This could be due to increased volatility in the modern NBA, such as a faster pace of play and frequent roster changes.
+Our analysis also shows that back-to-back games have a noticeable impact on scoring outcomes. Home teams playing back-to-back tend to have smaller point margins compared to rested teams. This suggests that fatigue can reduce performance even with home court advantages. In contrast, rested teams appear more likely to have extreme outcomes or blowouts, as seen in the outliers of the distribution.
+When examining betting market accuracy across these scenarios, the results show that the market handles situations where the away team is tired relatively well. However, the market appears to struggle more when the home team is playing back-to-back games, as the betting spread is more likely to be inaccurate. This can mean that fatigue affecting the home team may not be fully accounted for in betting lines.
+These findings indicate that while betting markets are generally strong predictors, there are still flaws when accounting for factors like player fatigue. This factor may create consistent inefficiencies in the market, especially in games involving back-to-back schedules and fatigued home teams, which can eventually be predicted. 
